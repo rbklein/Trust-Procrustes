@@ -1,2 +1,2 @@
-# PROCRUSTES_POD_SQP
-A POD-SQP solver for a constrained Procrustes problem
+# Trust Procrustes
+A trust-region POD-SQP solver for a constrained Procrustes problem
