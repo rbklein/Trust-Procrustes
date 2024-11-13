@@ -1,6 +1,26 @@
 import numpy as np
 import matplotlib.pyplot as plt
 
+import test_problem as test
+from Byrd_Omojokun import *
+
+num_vars = 5
+num_cons = 2
+
+problem         = test.Test_Problem(num_vars, num_cons)
+trust_radius    = 0.1
+solver          = ByrdOmojokun(problem, trust_radius)
+
+x_exact,lamb    = problem.exact_solution()
+x               = solver.horizontal_step(0,0,0)
+print(x, x_exact)
+
+
+
+
+
+
+'''
 import prepare_data as dat
 import procustes_solvers as pr
 import quadrature_points as qp
@@ -28,3 +48,4 @@ plt.plot(Mold @ np.linalg.pinv(Mold) @ X[:,-1])
 plt.plot(X[:,-1], '--')
 
 plt.show()
+'''

@@ -39,6 +39,13 @@ class Test_Problem(object):
             S           = np.linspace(1, 2, target_rank)  
             self.C      = sp.csr_matrix(U @ np.diag(S) @ Vt)
     
+    #set user-specified choice of problem matrices and vectors
+    def set_params(self, A, b, C, d):
+        self.A = A
+        self.b = b
+        self.C = C
+        self.d = d
+
     #objective function
     def f(self, x):
         return 0.5 * np.inner(x, self.A @ x) + np.inner(self.b, x)
@@ -55,10 +62,37 @@ class Test_Problem(object):
     def compute_cons_Jacobian(self, x):
         return self.C
 
+    #compute gradient Lagrangian
+    def grad_L(self, x, multipliers):
+        dLdx = self.A @ x + self.b + self.C.T @ multipliers
+        dLdl = self.C @ x - self.d
+        return np.concatenate((dLdx, dLdl))
+
     #Hessian of Lagrangian functional
     def Lagrangian_Hessian(self, x, multipliers):
         return self.A
     
+    #process step
+    def step(self, x, step):
+        return x + step
+    
+    #compute the exact solution of the test problem
+    def exact_solution(self):
+        b_Ct        = sp.hstack((sp.csr_matrix(self.b[:,None]), self.C.T))
+        Ainv_b_Ct   = sp.linalg.spsolve(self.A, b_Ct)
+        Ainv_b      = Ainv_b_Ct[:,0]
+        Ainv_Ct     = Ainv_b_Ct[:,1:]
+        C_Ainv_Ct   = self.C @ Ainv_Ct
+        C_Ainv_b    = ((self.C @ Ainv_b).toarray())[:,0] 
+
+        lamb        = - sp.linalg.spsolve(C_Ainv_Ct, self.d + C_Ainv_b)
+        x           = - sp.linalg.spsolve(self.A, self.b + self.C.T @ lamb)
+
+        return x, lamb
+    
 if __name__ == "__main__":
     problem = Test_Problem(5, 2)
     
+    x, lamb = problem.exact_solution()
+    print(problem.A @ x + problem.b + problem.C.T @ lamb)
+    print(problem.C @ x - problem.d)

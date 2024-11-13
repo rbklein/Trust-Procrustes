@@ -29,7 +29,9 @@ class Procrustes_Problem(object):
         #precompute frequently used products
         self.SST = self.S @ self.S.T
         self.AST = self.A @ self.S.T
-        self.ATA = self.A.T @ self.A
+        self.AAT = self.A @ self.A.T
+
+        print(self.AAT.shape)
 
         #Deduce shape parameters
         self.r, _           = self.A.shape
@@ -69,7 +71,7 @@ class Procrustes_Problem(object):
 
     #compute objective function
     def f(self, T):
-        obj = np.trace(self.ATA - 2 * T.T @ self.AST + T.T @ T @ self.SST) 
+        obj = np.trace(self.AAT - 2 * T.T @ self.AST + T.T @ T @ self.SST) 
         return obj
 
     #compute objective gradient
@@ -232,7 +234,7 @@ class Procrustes_Problem(object):
             lamb    = multipliers[self.num_unit_cons:]
         return Gamma, nu, lamb
     
-    #proces step
+    #process step
     def step(self, T, step):
         return T + np.reshape(step, (self.r, self.r), order = 'F') 
 

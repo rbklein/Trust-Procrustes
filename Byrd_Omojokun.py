@@ -13,13 +13,14 @@ class ByrdOmojokun(object):
 
         see: "On the implementation of an algorithm for large-scale equality constrained optimization"
     """
-    def __init__(self, problem, trust_radius):
+    def __init__(self, problem, trust_radius, maxits = 100):
         #set optimization problem to be solved
         self.problem = problem
 
         #set algorithm parameters
-        self.trust_radius = trust_radius
-        self.VERTICAL_STEP_FACTOR = 0.8
+        self.trust_radius           = trust_radius
+        self.VERTICAL_STEP_FACTOR   = 0.8
+        self.maxits                 = maxits
 
     #solving routine
     def solve(self, T):
@@ -27,29 +28,81 @@ class ByrdOmojokun(object):
         multipliers = self.Lagrange_estimate(T)
 
         it = 0
-        while it < 100:
-            v_step = self.vertical_step(T)
-            h_step = self.horizontal_step(T, multipliers, v_step)
+        while it < self.maxits:
+            v_step  = self.vertical_step(T)
+            h_step  = self.horizontal_step(T, multipliers, v_step)
+            step    = h_step
 
-            step    = v_step + h_step
-            T       = problem.step(T, step)
+            rho     = self.evaluate_success(T, multipliers, step)
+
+            if rho > 0.5:
+                T                   = problem.step(T, step)
+                self.trust_radius   = np.minimum(2.0 * self.trust_radius, 1e10)
+            else:
+                self.trust_radius   = np.maximum(0.5 * np.linalg.norm(step), 1e-10)
 
             multipliers = self.Lagrange_estimate(T)
 
-            #put in merit function function
-            H = self.problem.Lagrangian_Hessian(T, multipliers)
-            g = self.problem.grad_f(T)
-            A = self.problem.compute_cons_Jacobian(T)
-            c = self.problem.compute_constraints(T)
-
-            quad_model  = 1/2 * np.inner(step, H @ step) + np.inner(g, step)
-            lin_cons    = A @ step + c
-
             it += 1
-            print(it, np.linalg.norm(problem.grad_L(T, multipliers)))
-
+            print('it: ', it, '\t', 'KKT: ', np.linalg.norm(problem.grad_L(T, multipliers)), '\t',  'red: ', rho, '\t', 'rad: ', self.trust_radius, '\t', 'step: ', np.linalg.norm(step))
+            
         return T
     
+
+    #evaluate if proposed step is successfull
+    def evaluate_success(self, T, multipliers, step):
+        #compute quadratic model parameters
+        H   = self.problem.Lagrangian_Hessian(T, multipliers)
+        g   = self.problem.grad_f(T)
+        fk  = self.problem.f(T)
+        A   = self.problem.compute_cons_Jacobian(T)
+        c   = self.problem.compute_constraints(T)
+
+        pHp = np.inner(step, H @ step)
+        gp  = np.inner(g, step)
+
+        #compute penalty factor
+        if pHp > 0:
+            sigma = 1
+        else:
+            sigma = 0
+
+        mu = 10 * (gp + sigma * pHp) / (0.5 * np.linalg.norm(c, 1))
+        
+        #compute quadratic model at next step
+        quad_model_p    = 1/2 * pHp + gp + fk
+        lin_cons_p      = A @ step + c
+
+        #compute quadratic model after zero step
+        quad_model_z    = fk
+        lin_cons_z      = c
+        
+        #compute merit function values for quadratic models
+        quad_merit_p    = quad_model_p + mu * np.linalg.norm(lin_cons_p)
+        quad_merit_z    = quad_model_z + mu * np.linalg.norm(lin_cons_z)
+
+        #compute actual model at next step
+        T_next          = self.problem.step(T, step)
+        f_p             = self.problem.f(T_next)
+        c_p             = self.problem.compute_constraints(T_next)
+
+        #compute actual model at current step
+        f_z             = self.problem.f(T)
+        c_z             = self.problem.compute_constraints(T)
+
+        #compute merit functions for actual model
+        merit_p         = f_p + mu * np.linalg.norm(c_p)
+        merit_z         = f_z + mu * np.linalg.norm(c_z)
+
+        if np.isclose(quad_merit_z - quad_merit_p, 0):
+            den = 1e-16
+        else:
+            den = (quad_merit_z - quad_merit_p) 
+
+        success_factor  = (merit_z - merit_p) / den
+        return success_factor
+        
+
     #Langrange multiplier estimator
     def Lagrange_estimate(self, T):
         """
@@ -109,13 +162,17 @@ class ByrdOmojokun(object):
         #compute QP problem matrix and vector
         H = problem.Lagrangian_Hessian(T, multipliers)
         c = problem.grad_f(T)
+        #H = self.problem.A
+        #c = self.problem.b
 
         #compute QP linear constraint matrix and vector
         A = problem.compute_cons_Jacobian(T)
         b = - A @ vert_step
+        #A = self.problem.C
+        #b = -self.problem.d
 
         #compute horizontal trust-radius
-        radius = np.sqrt(self.trust_radius**2 - np.linalg.norm(vert_step)**2) 
+        radius = self.trust_radius 
 
         #compute feasible initial point                                    
         #x = sp.linalg.lsqr(A, -b)[0]                                       #most efficient but need to check if lack of accuracy matters
@@ -132,17 +189,17 @@ class ByrdOmojokun(object):
         p = -g
 
         #precomputed terms
-        rt_g    = np.inner(r, g) 
+        rt_g    = max(np.inner(r, g), 1e-16) 
         Hp      = H @ p
 
         #define iteration parameters
         it      = 0
         maxits  = A.shape[1] - A.shape[0]
-        tol     = max(min(0.01 * np.sqrt(rt_g), 0.1 * rt_g), 1e-16)
 
         #projected CG loop
         while it < maxits:
-            if rt_g < tol:
+            if rt_g < 1e-15:
+                #print('tolerance satisfied')
                 break
 
             alpha   = rt_g / np.inner(p, Hp)
@@ -154,6 +211,7 @@ class ByrdOmojokun(object):
                 poly_b  = 2 * alpha * np.inner(x,p)
                 poly_c  = np.inner(x,x)-radius**2
                 theta   = (-poly_b + np.sqrt(poly_b**2 - 4 * poly_a * poly_c)) / (2 * poly_a)
+                #print('radius passed')
                 return x + theta * alpha * p
             else:
                 x = x_next
@@ -169,6 +227,7 @@ class ByrdOmojokun(object):
             Hp      = H @ p
 
             it += 1
+            #print(it, rt_g)
 
         return x
 
@@ -214,59 +273,60 @@ class ByrdOmojokun(object):
 
 
 if __name__ == "__main__":
-    '''
-
-    import matplotlib.pyplot as plt
-    import test_problem as test
-    num_vars = 5
-    num_cons = 2
-
-    problem         = test.Test_Problem(num_vars, num_cons)
-    trust_radius    = 3
-    solver          = ByrdOmojokun(problem, trust_radius)
     
-    x       = np.ones(num_vars)
-    v_step  = solver.vertical_step(x)
-    h_step  = solver.horizontal_step(x, np.ones(num_cons), v_step)
+    TEST = False
 
-    #horizontal step minimizes linear constrain subject to
-    b_horizontal = problem.C @ v_step
+    if TEST:
+        import matplotlib.pyplot as plt
+        import test_problem as test
+        num_vars = 5
+        num_cons = 2
 
-    print(problem.C @ h_step, problem.C @ v_step)
-    print(np.linalg.norm(h_step))
+        problem         = test.Test_Problem(num_vars, num_cons)
+        trust_radius    = 1
+        solver          = ByrdOmojokun(problem, trust_radius, 10)
+        
+        x_exact,lamb    = problem.exact_solution()
+        x               = solver.solve(np.ones(num_vars))
+        print(x, x_exact)
+    else:
+        import matplotlib.pyplot as plt
+        import prepare_data as dat
+        import procustes_solvers as pr
+        import quadrature_points as qp
+        import procrustes_problem as crus
 
-    '''
+        data        = np.load('data_u.npy')
+        nx, nt      = data.shape
 
-    import matplotlib.pyplot as plt
-    import prepare_data as dat
-    import procustes_solvers as pr
-    import quadrature_points as qp
-    import procrustes_problem as crus
+        r           = 40
+        m           = 40
+        P, indices  = qp.deim(data, m)
 
-    data        = np.load('data_u.npy')
-    nx, nt      = data.shape
+        X, A, S, U  = dat.generate_problem_matrices(data, indices, r)
+        u,v,B,G     = dat.generate_constraint_matrices(U, (0,nx-1), (0,m-1))
+        T           = pr.solve_non_normal_procrustes(A, S, 1e-4)
 
-    r           = 40
-    m           = 40
-    P, indices  = qp.deim(data, m)
+        problem = crus.Procrustes_Problem(X, S, A, U, u, v)
 
-    X, A, S, U  = dat.generate_problem_matrices(data, indices, r)
-    u,v,B,G     = dat.generate_constraint_matrices(U, (0,nx-1), (0,m-1))
-    T           = pr.solve_non_normal_procrustes(A, S, 1e-4)
+        trust_radius = 10
+        solver = ByrdOmojokun(problem, trust_radius, 1000)
 
-    problem = crus.Procrustes_Problem(X, S, A, U, u, v)
+        T = solver.solve(T)
 
-    trust_radius = 0.1
-    solver = ByrdOmojokun(problem, trust_radius)
+        print(np.max(np.abs(np.sum(U @ T, axis = 1))))
 
-    T = solver.solve(T)
-    plt.plot(U @ T)
-    plt.show()
+        plt.figure()
+        plt.plot(U @ T)
 
-    #v_step = solver.vertical_step(T)
-    #h_step = solver.horizontal_step(T, np.ones(problem.num_cons), v_step)
+        plt.figure()
+        plt.imshow(T.T @ T, interpolation = None)
 
-    #print(np.linalg.norm(problem.compute_cons_Jacobian(T) @ (h_step - v_step), np.inf))
-    #print(np.linalg.norm(h_step))
-    
+        plt.show()
+
+        #v_step = solver.vertical_step(T)
+        #h_step = solver.horizontal_step(T, np.ones(problem.num_cons), v_step)
+
+        #print(np.linalg.norm(problem.compute_cons_Jacobian(T) @ (h_step - v_step), np.inf))
+        #print(np.linalg.norm(h_step))
     
