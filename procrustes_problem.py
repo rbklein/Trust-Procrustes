@@ -79,6 +79,17 @@ class Procrustes_Problem(object):
         g = 2 * (T @ self.SST - self.AST)
         return vec(g)
 
+    #compute vectorized residual value of least squares problem
+    def residual(self, T):
+        r = self.A - T @ self.S
+        return vec(r)
+
+    #compute Jacobian of vectorized residual
+    def residual_Jacobian(self, T):
+        Ir  = sp.eye(self.r)
+        J   = -sp.kron(self.S.T, Ir)
+        return J
+
     #compute boundary constraint
     def boundary_cons(self, T):
         #check if boundary is not periodic
@@ -128,7 +139,7 @@ class Procrustes_Problem(object):
         mat     = Teij.reshape((self.r**2, -1), order = 'F').T
         return mat
     
-    #compute sparse constraint Jacobian of vectorized system
+    #compute constraint values
     def compute_constraints(self, T):
         orth = self.orth_cons(T)
         unit = self.unit_cons(T)
@@ -237,6 +248,50 @@ class Procrustes_Problem(object):
     #process step
     def step(self, T, step):
         return T + np.reshape(step, (self.r, self.r), order = 'F') 
+
+
+class Scipy_Procrustes(object):
+    """
+        Wrap a Procrustes problem object to accept vectorized inputs
+    """
+    def __init__(self, problem):
+        self.prob       = problem
+        self.num_cons   = problem.num_cons
+        self.r          = problem.r
+
+    def f(self, v_T):
+        T   = mat(v_T, self.prob.r)
+        obj = self.prob.f(T)
+        return obj 
+
+    def grad_f(self, v_T):
+        T = mat(v_T, self.prob.r)
+        g = self.prob.grad_f(T)
+        return g
+    
+    def hess_f(self, v_T):
+        Ir  = sp.eye(self.prob.r)
+        return sp.kron((2 * self.prob.SST), Ir)
+    
+    def residual(self, v_T):
+        T = mat(v_T, self.prob.r)
+        r = self.prob.residual(T)
+        return r
+    
+    def residual_Jacobian(self, v_T):
+        T = mat(v_T, self.prob.r)
+        J = self.prob.residual_Jacobian(T)
+        return J
+
+    def compute_constraints(self, v_T):
+        T = mat(v_T, self.prob.r)
+        c = self.prob.compute_constraints(T)
+        return c 
+    
+    def compute_cons_Jacobian(self, v_T):
+        T = mat(v_T, self.prob.r)
+        J = self.prob.compute_cons_Jacobian(T)
+        return J
 
 
 if __name__ == "__main__":

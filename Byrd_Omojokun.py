@@ -27,25 +27,29 @@ class ByrdOmojokun(object):
         #estimate initial Lagrange multipliers
         multipliers = self.Lagrange_estimate(T)
 
+        #solve loop
         it = 0
         while it < self.maxits:
+            #vertical and horizontal step
             v_step  = self.vertical_step(T)
             h_step  = self.horizontal_step(T, multipliers, v_step)
             step    = h_step
 
-            rho     = self.evaluate_success(T, multipliers, step)
-
-            if rho > 0.5:
+            #accept or reject step and adapt trust-radius
+            if self.evaluate_success(T, multipliers, step):
                 T                   = problem.step(T, step)
-                self.trust_radius   = np.minimum(2.0 * self.trust_radius, 1e10)
+                self.trust_radius   = np.minimum(2.0 * self.trust_radius, 10)
             else:
+                print('step rejected')
                 self.trust_radius   = np.maximum(0.5 * np.linalg.norm(step), 1e-10)
 
+            #iterate and print info
+            it += 1
+            print('it: ', it, '\t', 'dLdx: ', np.linalg.norm(problem.dLdT(T, multipliers)), '\t', 'cons: ', np.linalg.norm(problem.compute_constraints(T)), '\t', 'radius: ', self.trust_radius, '\t', 'step: ', np.linalg.norm(step))
+            
+            #estimate Lagrange multipliers
             multipliers = self.Lagrange_estimate(T)
 
-            it += 1
-            print('it: ', it, '\t', 'KKT: ', np.linalg.norm(problem.grad_L(T, multipliers)), '\t',  'red: ', rho, '\t', 'rad: ', self.trust_radius, '\t', 'step: ', np.linalg.norm(step))
-            
         return T
     
 
@@ -94,13 +98,21 @@ class ByrdOmojokun(object):
         merit_p         = f_p + mu * np.linalg.norm(c_p)
         merit_z         = f_z + mu * np.linalg.norm(c_z)
 
-        if np.isclose(quad_merit_z - quad_merit_p, 0):
-            den = 1e-16
-        else:
-            den = (quad_merit_z - quad_merit_p) 
+        print('new: ', merit_p, '\t', 'zero: ', merit_z, '\t', 'dmerit: ', merit_z - merit_p, '\t', 'm. new: ', quad_merit_p, '\t', 'm. zero: ', quad_merit_z, '\t', 'dmerit mod: ', quad_merit_z - quad_merit_p)
 
-        success_factor  = (merit_z - merit_p) / den
-        return success_factor
+        if quad_merit_z - quad_merit_p <= 0:
+            return False
+        
+        if merit_z - merit_p < 0:
+            return False
+        
+        if quad_merit_z - quad_merit_p > 0:
+            success_factor  = (merit_z - merit_p) / (quad_merit_z - quad_merit_p)
+            if success_factor > 0.8:
+                return True
+            else:
+                return False
+
         
 
     #Langrange multiplier estimator
@@ -130,11 +142,11 @@ class ByrdOmojokun(object):
                     
                     P_A r = r - A^T v   with    AA^T v = A r
 
-            these are the optimiality conditions for
+            these are the optimality conditions for
 
                     min ||r - A^T v||^2
 
-            which is solve iteratively for sparse A. This approach is known as the normal equations approach. See:
+            which is solved iteratively for sparse A. This approach is known as the normal equations approach. See:
             "On the solutions of equality constrained quadratric programming problems arising in optimization" Gould, Hribar and Nocedal
         """
         #solve minimization with or without machine precision accuracy
@@ -199,7 +211,7 @@ class ByrdOmojokun(object):
         #projected CG loop
         while it < maxits:
             if rt_g < 1e-15:
-                #print('tolerance satisfied')
+                #print('\t', 'minimum in trust-region cg iterations: ', it)
                 break
 
             alpha   = rt_g / np.inner(p, Hp)
@@ -211,7 +223,7 @@ class ByrdOmojokun(object):
                 poly_b  = 2 * alpha * np.inner(x,p)
                 poly_c  = np.inner(x,x)-radius**2
                 theta   = (-poly_b + np.sqrt(poly_b**2 - 4 * poly_a * poly_c)) / (2 * poly_a)
-                #print('radius passed')
+                #print('\t', 'rad exceeded, cg iterations: ', it)
                 return x + theta * alpha * p
             else:
                 x = x_next
@@ -227,7 +239,6 @@ class ByrdOmojokun(object):
             Hp      = H @ p
 
             it += 1
-            #print(it, rt_g)
 
         return x
 
@@ -299,8 +310,8 @@ if __name__ == "__main__":
         data        = np.load('data_u.npy')
         nx, nt      = data.shape
 
-        r           = 40
-        m           = 40
+        r           = 30
+        m           = 30
         P, indices  = qp.deim(data, m)
 
         X, A, S, U  = dat.generate_problem_matrices(data, indices, r)
