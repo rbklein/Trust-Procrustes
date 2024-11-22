@@ -26,13 +26,6 @@ class Procrustes_Problem(object):
         self.A = np.copy(A)
         self.U = np.copy(U)
 
-        #precompute frequently used products
-        self.SST = self.S @ self.S.T
-        self.AST = self.A @ self.S.T
-        self.AAT = self.A @ self.A.T
-
-        print(self.AAT.shape)
-
         #Deduce shape parameters
         self.r, _           = self.A.shape
         self.m, _           = self.S.shape
@@ -54,6 +47,19 @@ class Procrustes_Problem(object):
         else:
             self.num_boundary_cons = 0
 
+        #precompute frequently used products
+        self.SST = self.S @ self.S.T
+        self.AST = self.A @ self.S.T
+        self.AAT = self.A @ self.A.T
+        if not self.periodic_flag:
+            self.BTB = self.B.T @ self.B
+            self.BTG = self.B.T @ self.G
+        else:
+            self.BTB = 0
+            self.BTG = 0
+        self.uuT = np.outer(self.u, self.u)
+        self.vuT = np.outer(self.v, self.u)
+
         #determine orthogonality constraints
         self.triu_inds      = np.triu_indices(self.r, 1)
         self.num_orth_cons  = len(self.triu_inds[0])
@@ -68,6 +74,8 @@ class Procrustes_Problem(object):
         self.compute_unit_Jacobian()
         if not self.periodic_flag:
             self.compute_boundary_Jacobian() 
+
+
 
     #compute objective function
     def f(self, T):
@@ -232,7 +240,7 @@ class Procrustes_Problem(object):
         sol         = scipy_solve(mat, rhs_matrix, assume_a='sym')
         sol         = vec(sol)
         return sol
-    
+
     #extract Gamma, Lambda, nu from an array of Lagrange multipliers
     def separate_multipliers(self, multipliers):
         if not self.periodic_flag:
@@ -244,6 +252,7 @@ class Procrustes_Problem(object):
             nu      = multipliers[:self.num_unit_cons]
             lamb    = multipliers[self.num_unit_cons:]
         return Gamma, nu, lamb
+    
     
     #process step
     def step(self, T, step):
@@ -303,8 +312,8 @@ if __name__ == "__main__":
     data        = np.load('data_u.npy')
     nx, nt      = data.shape
 
-    r           = 5
-    m           = 5
+    r           = 20
+    m           = 20
     P, indices  = qp.deim(data, m)
 
     X, A, S, U  = dat.generate_problem_matrices(data, indices, r)
@@ -314,6 +323,16 @@ if __name__ == "__main__":
     problem = Procrustes_Problem(X, S, A, U, u, v)
     sol = problem.solve_Hessian(T, np.ones(problem.num_cons), np.ones(r**2))
 
+    d = problem.JTJ_diagonal(T, 1)
+
+    JTJ = np.zeros((r**2,r**2))
+    for i in range(r**2):
+        ei      = np.zeros(r**2)
+        ei[i]   = 1
+        JTJ[:,i] = problem.r_JTJp(T, ei) + problem.c_JTJp(T, ei)
+
+    print(d - np.diagonal(JTJ))
+
     plt.figure()
     plt.plot(sol)
 
@@ -321,4 +340,82 @@ if __name__ == "__main__":
     plt.spy(problem.KKT_mat(T, np.ones(problem.num_cons)))
     plt.show()
 
+
+
+
+"""
+Code for solving Augmented Lagrangian by a normal equation approach. Code is
+saved but approach not taking due to ill-conditioning of the normal equations
+
+as class methods:
+    
+def compute_JTJ(self, T):
+        JTJ = np.zeros((self.num_params, self.num_params))
+        for i in range(self.num_params):
+            ei      = np.zeros(self.num_params)
+            ei[i]   = 1
+            JTJ[:,i] = self.r_JTJp(T, ei) + self.c_JTJp(T, ei)
+        return JTJ
+
+    #diagonal values of JTJ for scaling trust-region methods
+    def JTJ_diagonal(self, T, mu = 1):
+        d = self.r_JTJ.diagonal() + mu * self.c_JTJ.diagonal()
+        d += mu * sp.linalg.norm(self.compute_orth_Jacobian(T), 2, axis = 0)**2
+        return d
+
+    #compute constant part of residual Jacobian-Jacobian product
+    def init_residual_JacJac_product(self):
+        Ir          = sp.eye(self.r)
+        self.r_JTJ  = sp.kron(self.SST, Ir)
+
+    #compute constant part of constraint Jacobian-Jacobian product
+    def init_constraint_JacJac_product(self):
+        Ir          = sp.eye(self.r)
+        self.c_JTJ  = sp.kron(np.outer(self.u,self.u), Ir) 
+        if not self.periodic_flag:
+            self.c_JTJ += sp.kron(Ir, self.BTB) 
+    
+    #compute product residual Jacobian-Jacobian-vector product
+    def r_JTJp(self, T, p):
+        JTJp = self.r_JTJ @ p
+        return JTJp
+
+    #compute product constraint Jacobian-Jacobian-vector product
+    def c_JTJp(self, T, p):
+        #compute product with orthogonality constraint JacJacVec product using subsequent sparse Jacobian multiplications
+        Jc      = self.compute_orth_Jacobian(T)
+        Jcp     = Jc @ p
+        JTJp    = self.c_JTJ @ p + Jc.T @ Jcp
+        return JTJp
+
+    #compute a preconditioner method for use with the augmented Langrangian least-squares method
+    def init_ALLS_preconditioner(self, penalty_parameter):
+        JTJ             = self.r_JTJ + penalty_parameter * self.c_JTJ
         
+        #preconditioner object with solve method
+        return sp.linalg.splu(JTJ)
+    
+    #compute residual Jacobian product
+    def r_JTb(self, T):
+        JTb = -vec(self.AST - T @ self.SST)
+        return JTb
+    
+    #compute constraint Jacobian product
+    def c_JTb(self, T):
+        c_JTb = vec(T @ self.uuT - self.vuT)
+        if not self.periodic_flag:
+            c_JTb += vec(self.BTB @ T - self.BTG)
+        c_JTb += self.compute_orth_Jacobian(T).T @ (T.T @ T)[self.triu_inds]
+        return c_JTb
+
+    #computed constraint Jacobian product of augmented Lagrangian penalty
+    def ALLS_JTb(self, T, multipliers):
+        Gamma, nu, lamb = self.separate_multipliers(multipliers)
+
+        JTb = 0.5 * vec(np.outer(nu, self.u))
+        if not self.periodic_flag:
+            JTb += 0.5 * vec(self.B.T @ Gamma)
+        JTb += 0.5 * self.compute_orth_Jacobian(T).T @ lamb
+
+        return JTb
+"""

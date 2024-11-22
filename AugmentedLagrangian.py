@@ -16,7 +16,7 @@ class AugmentedLagrangianLS(object):
         see L.Vandenberghe ECE133B (Spring 2023)
     """
 
-    def __init__(self, problem, sub_tolerance = 1e-4):
+    def __init__(self, problem, tol = 1e-4):
         #set problem
         self.problem = problem
         
@@ -24,9 +24,9 @@ class AugmentedLagrangianLS(object):
         self.mu             = 1
         self.multipliers    = np.zeros(self.problem.num_cons)
 
-        #subproblem tolerance
-        self.tol = sub_tolerance
-    
+        #set solver parameters
+        self.tol = tol
+
     #compute the residual vector of the augmented least squares problem
     def augmented_Lagrangian_residual(self, T):
         robj = self.problem.residual(T)
@@ -61,6 +61,7 @@ class AugmentedLagrangianLS(object):
             print(it, '\t', 'obj: ', np.linalg.norm(self.problem.f(T)), '\t', 'cons: ', np.linalg.norm(gkp))
         
         return T
+    
 
 if __name__ == "__main__":
     import matplotlib.pyplot as plt
@@ -72,21 +73,31 @@ if __name__ == "__main__":
     data        = np.load('data_u.npy')
     nx, nt      = data.shape
 
-    r           = 40
-    m           = 40
+    #_, s, _ = np.linalg.svd(data, full_matrices=False)
+    #plt.semilogy(s, 'o')
+    #plt.show()
+
+    r           = 15
+    m           = r-1
     P, indices  = qp.deim(data, m)
+    indices = np.concatenate((indices, np.array([450])))
 
     X, A, S, U  = dat.generate_problem_matrices(data, indices, r)
     u,v,B,G     = dat.generate_constraint_matrices(U, (0,nx-1), (0,m-1))
     T           = pr.solve_non_normal_procrustes(A, S, 1e-4)
 
-    print(S.shape, r**2)
+    Q,R = np.linalg.qr(S.T)
 
-    problem         = crus.Procrustes_Problem(X, S, A, U, u, v)
+    #Compress mesh and snapshot scalings out of problem using POD and QR
+    problem         = crus.Procrustes_Problem(X, R.T, A @ Q, U, u, v)
     problem_wrapper = crus.Scipy_Procrustes(problem)
-    
-    solver = AugmentedLagrangianLS(problem_wrapper, 1e-3)
+
+    solver = AugmentedLagrangianLS(problem_wrapper)
+    t1 = timer()
     T      = solver.solve(T)
+    t2 = timer()
+
+    print('time: ', t2 - t1)
 
     v_T = vec(T)
     T   = mat(v_T, r)
@@ -99,27 +110,17 @@ if __name__ == "__main__":
     plt.figure()
     plt.imshow(T.T @ T, interpolation = None)
 
+    plt.figure()
+    plt.semilogy(np.diagonal(T.T @ T), 'o')
+
+    plt.figure()
+    plt.plot(U @ T @ S[:,-1])
+    plt.plot(X[:,-1])
+    plt.plot(indices, np.zeros_like(indices), '+')
+
     plt.show()
 
 
-    
-'''
-res = opt.minimize(
-        fun     = problem_wrapper.f,
-        x0      = vec(T),
-        method  = 'SLSQP',
-        jac     = problem_wrapper.grad_f,
-        hess    = problem_wrapper.hess_f,
-        constraints = {
-            'type'  : 'eq',
-            'fun'   : problem_wrapper.cons,
-            'jac'   : problem_wrapper.jac_cons
-        },
-        options = {
-            'disp'      : True,
-            'maxiter'   : 10000, 
-            'verbose'   : 2
-        }
-        v_T = res.x
-    )
-'''
+
+
+
